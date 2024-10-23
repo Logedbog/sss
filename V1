@@ -1,0 +1,588 @@
+for i, v in pairs(getgc()) do
+    if (typeof(v) == "function") then
+        local Script = rawget(getfenv(v), "script")
+        local Script_Name = tostring(Script)
+        local Function_Name = debug.getinfo(v).name
+        if Function_Name == "updatePlayers" and Script_Name == "PlayerClient" then
+            Player_Table = debug.getupvalue(v, 1)
+        elseif Function_Name == "GetEntityFromPart" and Script_Name == "EntityClient" then
+            Entity_Table = debug.getupvalue(v, 1)
+        end;
+    end;
+end;
+
+
+if (_G.drawings) then
+    for _, drawing in next, _G.drawings do
+        drawing:Remove()
+    end
+    for _, connection in next, _G.connections do
+        connection:Disconnect()
+    end
+end
+_G.drawings = {}
+_G.connections = {}
+_G.Team = nil 
+-- localisation
+local tost = tostring
+local spawn = task.spawn
+local drawing_new = Drawing.new
+local instance_new = Instance.new
+local colour3_new = Color3.new
+local colour3_fromrgb = Color3.fromRGB
+local colour3_fromhsv = Color3.fromHSV
+local vector3_new = Vector3.new
+
+local cframe_new = CFrame.new
+local cframe_lookat = CFrame.lookAt
+local cframe_fromorientation = CFrame.fromOrientation
+local coloursequencekeypoint_new = ColorSequenceKeypoint.new
+local numbersequencekeypoint_new = NumberSequenceKeypoint.new
+local table_insert = table.insert
+local table_remove = table.remove
+local math_huge = math.huge
+local math_floor = math.floor
+local math_abs = math.abs
+local math_max = math.max
+local math_min = math.min
+local math_random = math.random
+local math_cos = math.cos
+local math_sin = math.sin
+local math_rad = math.rad
+local math_round = math.round
+local camera = workspace.CurrentCamera
+-- services
+local workspace = game:GetService('Workspace')
+local terrain = workspace:FindFirstChildOfClass('Terrain')
+local players = game:GetService('Players')
+local soundservice = game:GetService('SoundService')
+local runservice = game:GetService('RunService')
+local userinputservice = game:GetService('UserInputService')
+local lighting = game:GetService('Lighting')
+local usergamesettings = UserSettings():GetService('UserGameSettings')
+local replicatedstorage = game:GetService('ReplicatedStorage')
+local coregui = game:GetService('CoreGui')
+local httpservice = game:GetService('HttpService')
+--other shit
+local local_player = players.LocalPlayer
+local name = local_player.Name
+local displayname = local_player.Name
+local mouse = local_player:GetMouse()
+local viewportsize = camera.ViewportSize
+
+_G.Teamcheck = false 
+local DummyPlayer = game:GetService("ReplicatedStorage").Shared.entities.Player.Model
+-- functions
+local functions
+--general functions
+do
+    functions = {}
+
+    function functions:getboundings(model)
+       -- local cframe, size = model:GetBoundingBox()
+       local cframe = model.PrimaryPart.CFrame
+        return cframe, Vector3.new(3,6,2), cframe.Position
+    end
+
+    function functions:worldtoviewport(position, offsetx, offsety)
+        offsetx = offsetx or 0
+        offsety = offsety or 0
+        local screen_pos, on_screen = camera:WorldToViewportPoint(position)
+        return Vector2(screen_pos.X + offsetx, screen_pos.Y + offsety), on_screen, screen_pos.Z
+    end
+    function functions:worldtoscreenpoint(position, offsetx, offsety)
+        offsetx = offsetx or 0
+        offsety = offsety or 0
+        local screen_pos, on_screen = camera:WorldToScreenPoint(position)
+        return Vector2(screen_pos.X + offsetx, screen_pos.Y + offsety), on_screen, screen_pos.Z
+    end
+    function functions:calculate_magnitude(position1, position2)
+        local position2 = position2 or camera.CFrame.Position
+        local horizontal_offset, vertical_offset
+        if (tostring(typeof(position1)) == 'Vector3') then
+            horizontal_offset = (position1 * vector3_new(1, 0, 1) - position2 * vector3_new(1, 0, 1)).Magnitude
+            vertical_offset = math_abs(position1.Y - position2.Y)
+        end
+        local _magnitude = (position1 - position2).Magnitude
+        return math_round(_magnitude), _magnitude, horizontal_offset, vertical_offset
+    end
+    function functions:is_visible(part_pos, ignore_model, start_pos, ignore_list)
+		ignore_list = ignore_list or {}
+        start_pos = start_pos or camera.CFrame.Position
+        local cframe_direction = cframe_new(start_pos, part_pos)
+        local raycast_params = RaycastParams.new()
+        raycast_params.FilterDescendantsInstances = {local_player.Character, camera}
+        raycast_params.FilterType = Enum.RaycastFilterType.Exclude
+        raycast_params.IgnoreWater = true
+		for index, value in next, ignore_list do
+			--***
+		end
+        local result = workspace:Raycast(start_pos, cframe_direction.LookVector * 9999, raycast_params)
+        if (result and (result.Instance:IsDescendantOf(ignore_model) or result.Instance == ignore_model)) then
+            return true
+        end
+        return false
+    end
+    
+
+ script_settings = {
+    enabled = false,
+    box = {
+        enabled = false,
+        outline = true,
+        color = colour3_new(1, 1, 1),
+        type = 'corner',
+    },
+    filledbox = {
+        enabled = false,
+        color = colour3_fromrgb(77, 77, 77),
+        transparency = 30,
+    },
+    distance = {
+        enabled = false,
+        color = colour3_new(1, 1, 1),
+    },
+    name = {
+        enabled = true,
+        color = colour3_new(1, 1, 1),
+    },
+    healthbar = {
+        enabled = false,
+        color_full = colour3_new(0, 1, 0),
+        color_empty = colour3_new(1, 0, 0),
+        text = true,
+        thickness = 4,
+    },
+    tool = {
+        enabled = false,
+        color = colour3_new(1, 1, 1),
+    },
+    offscreenarrows = {
+        enabled = false,
+        outline = false,
+        radius = 200,
+        size = 20,
+        color = colour3_new(1, 1, 1),
+        -- extra
+        hpbars = true,
+        distance = true,
+        tool = true,
+        name = true,
+        box = false,
+    },
+}
+
+local function add_player(player)
+    if (player.model == local_player) then
+        return
+    end
+    -- creating esp
+    local esp_drawings = {
+        text = {
+            name = drawing_new('Text'),
+            distance = drawing_new('Text'),
+            tool = drawing_new('Text'),
+        },
+        box = {
+            line_trV = drawing_new('Line'),
+            line_trH = drawing_new('Line'),
+            line_tlV = drawing_new('Line'),
+            line_tlH = drawing_new('Line'),
+            line_brV = drawing_new('Line'),
+            line_brH = drawing_new('Line'),
+            line_blV = drawing_new('Line'),
+            line_blH = drawing_new('Line'),
+        },
+        outline = {
+            line_trV = drawing_new('Line'),
+            line_trH = drawing_new('Line'),
+            line_tlV = drawing_new('Line'),
+            line_tlH = drawing_new('Line'),
+            line_brV = drawing_new('Line'),
+            line_brH = drawing_new('Line'),
+            line_blV = drawing_new('Line'),
+            line_blH = drawing_new('Line'),
+        },
+        box_filled = {
+            box = drawing_new('Quad'),
+        },
+        healthbar = {
+            base = drawing_new('Square'),
+            health = drawing_new('Square'),
+            text = drawing_new('Text'),
+        },
+        offscreenarrows = {
+            arrow = drawing_new('Triangle'),
+            outline = drawing_new('Triangle'),
+        },
+    }
+    local osa = esp_drawings.offscreenarrows
+    local hb = esp_drawings.healthbar
+    local ob = esp_drawings.outline
+    local bo = esp_drawings.box
+    local fb = esp_drawings.box_filled
+    local te = esp_drawings.text
+    -- settings values
+    do
+        for index, value in next, esp_drawings do   
+            for _, drawing in next, value do
+                drawing.ZIndex = 2
+                drawing.Visible = false
+                table_insert(_G.drawings, drawing)
+                if (index == 'text') then
+                    drawing.Center = true
+                    drawing.Size = 10
+                    drawing.Outline = true
+                elseif (index == 'outline') then
+                    drawing.ZIndex = 1
+                    drawing.Thickness = 2
+                    drawing.Color = colour3_new(0, 0, 0)
+                elseif (index == 'box') then
+                    drawing.Thickness = 1
+                end
+            end
+        end
+        hb.base.Color = colour3_fromrgb(28, 28, 28)
+        hb.base.Filled = true
+        hb.base.ZIndex = 1
+        hb.health.Filled = true
+        hb.text.Center = true
+        hb.text.Size = 10
+        hb.text.Outline = true
+        osa.arrow.Filled = true
+        osa.outline.Filled = false
+        osa.outline.Color = colour3_new(0, 0, 0)
+        esp_drawings.box_filled.box.Filled = true
+        esp_drawings.text.name.Text = player.model.Name
+    end
+    -- drawings functions
+    local function hide_drawings()
+        for _, value in next, esp_drawings do
+            for _, drawing in next, value do
+                drawing.Visible = false
+            end
+        end
+    end
+    local function destroy_drawings()
+        for _, value in next, esp_drawings do
+            for _, drawing in next, value do
+                drawing:Remove()
+            end
+        end
+    end
+    local function toggle_table(_table, toggle)
+        for _, drawing in next, esp_drawings[_table] do
+            drawing.Visible = toggle
+        end
+    end
+    local function setvalue(_table, index, value)
+        for _, drawing in next, esp_drawings[_table] do
+            drawing[index] = value
+        end
+    end
+    -- math functions
+    local function rotateVector2(vector2, rotation)
+        local cos, sin = math_cos(rotation), math_sin(rotation)
+        return Vector2(cos * vector2.X - sin * vector2.Y, sin * vector2.X + cos * vector2.Y)
+    end
+    local function calculateOffset(vector2, position, size)
+        local cframe = cframe_new(position, camera.CFrame.Position)
+        local x, y = -size.X / 2, size.Y / 2
+        local tRight = functions:worldtoviewport((cframe * cframe_new(x, y, 0)).Position)
+        local bRight = functions:worldtoviewport((cframe * cframe_new(x, -y, 0)).Position)
+        return {X=math_max(tRight.X - vector2.X, bRight.X - vector2.X),Y=math_max((vector2.Y - tRight.Y), (bRight.Y - vector2.Y))}
+    end
+    local function calculatePoints(offset, vector2)
+        local bps = {
+            B = Vector2(vector2.X, vector2.Y + offset.Y),
+            T = Vector2(vector2.X, vector2.Y - offset.Y),
+            L = Vector2(vector2.X - offset.X, vector2.Y),
+            R = Vector2(vector2.X + offset.X, vector2.Y),
+        }
+        return {
+            BR = Vector2(bps.R.X, bps.B.Y),
+            TR = Vector2(bps.R.X, bps.T.Y),
+            TL = Vector2(bps.L.X, bps.T.Y),
+            BL = Vector2(bps.L.X, bps.B.Y),
+            B = bps.B,
+            T = bps.T,
+            L = bps.L,
+            R = bps.R,
+        }
+    end
+    -- esp functions
+    local function box_esp(settings, info)
+        if (settings.enabled ) then
+            local points = info.points
+            if (settings.type == 'full') then
+                toggle_table('box', false)
+                toggle_table('outline', false)
+                --box
+                bo.line_trV.Visible = true; bo.line_brV.Visible = true; bo.line_tlV.Visible = true; bo.line_blV.Visible = true;
+                -- vectors
+                bo.line_trV.To = points.TR
+                bo.line_trV.From = points.BR
+                bo.line_brV.To = points.BR
+                bo.line_brV.From = points.BL
+                bo.line_blV.To = points.BL
+                bo.line_blV.From = points.TL
+                bo.line_tlV.To = points.TL
+                bo.line_tlV.From = points.TR
+                if (settings.outline) then
+                    -- outline
+                    ob.line_trV.Visible = true; ob.line_brV.Visible = true; ob.line_tlV.Visible = true; ob.line_blV.Visible = true;
+                    -- replicating normal
+                    for index, drawing in next, ob do
+                        if (drawing.Visible) then
+                            drawing.To = bo[index].To
+                            drawing.From = bo[index].From
+                        end
+                    end
+                end
+            else
+                toggle_table('box', true)
+                -- vectors
+                bo.line_brV.To = points.BR
+                bo.line_brH.To = points.BR
+                bo.line_brV.From = Vector2(points.BR.X, info.vector2.Y + info.offset.Y / 1.7)
+                bo.line_brH.From = Vector2(info.vector2.X + info.offset.X / 1.7, points.BR.Y)
+                bo.line_trV.To =  points.TR
+                bo.line_trH.To = points.TR
+                bo.line_trV.From = Vector2(points.TR.X, info.vector2.Y - info.offset.Y / 1.7)
+                bo.line_trH.From = Vector2(info.vector2.X + info.offset.X / 1.7, points.TR.Y)
+                bo.line_tlV.To = points.TL
+                bo.line_tlH.To = points.TL
+                bo.line_tlV.From = Vector2(points.TL.X, info.vector2.Y - info.offset.Y / 1.7)
+                bo.line_tlH.From = Vector2(info.vector2.X - info.offset.X / 1.7, points.TL.Y)
+                bo.line_blV.To =  points.BL
+                bo.line_blH.To = points.BL
+                bo.line_blV.From = Vector2(points.BL.X, info.vector2.Y + info.offset.Y / 1.7)
+                bo.line_blH.From = Vector2(info.vector2.X - info.offset.X / 1.7, points.BL.Y)
+                -- outline visible
+                if (settings.outline) then
+                    -- outline
+                    toggle_table('outline', true)
+                    -- replicating normal
+                    for index, drawing in next, ob do
+                        drawing.To = bo[index].To
+                        drawing.From = bo[index].From
+                    end
+                end
+            end
+            -- colors
+            setvalue('box', 'Color', settings.color)
+        else
+            toggle_table('box', false)
+            toggle_table('outline', false)
+        end
+    end
+    local function filledbox_esp(settings, info)
+        local drawing = fb.box
+        drawing.Visible = settings.enabled
+        if (settings.enabled ) then
+            local points = info.points
+            drawing.Visible = true
+            drawing.Color = settings.color
+            drawing.Transparency = settings.transparency / 100
+            drawing.PointA = points.BR
+            drawing.PointB = points.TR
+            drawing.PointC = points.TL
+            drawing.PointD = points.BL
+        end
+    end
+    local function distance_esp(settings, info)
+        local drawing = te.distance
+        drawing.Visible = settings.enabled
+        if (settings.enabled ) then
+            local offset = 1
+            if (te.tool.Visible) then
+                offset = offset + te.tool.TextBounds.Y
+            end
+            drawing.Visible = true
+            drawing.Color = settings.color
+            drawing.Text = '[' .. tost(functions:calculate_magnitude(info.position)) .. ']'
+            drawing.Position = info.points.B + Vector2(0, offset)
+        end
+    end
+    local function name_esp(settings, info)
+        local drawing = te.name
+        drawing.Visible = settings.enabled
+        if (settings.enabled ) then
+            drawing.Visible = true
+            drawing.Color = settings.color
+			drawing.Text = player.type
+            drawing.Position = info.points.T + Vector2(0, -15)
+        end
+    end
+    local function healthbar_esp(settings, info)
+        toggle_table('healthbar', settings.enabled)
+        if (settings.enabled ) then
+            local base, bar, text = hb.base, hb.health, hb.text
+
+            local bar_y = info.offset.Y * 2
+            local hp = "100"
+            local hp_perc = (hp / "100")
+
+            base.Size = Vector2(settings.thickness, bar_y)
+            base.Position = info.points.TL + Vector2(-settings.thickness - 2, 0)
+            --base.Position = info.vector2 + Vector2(-info.offset.X - settings.thickness - 2, -info.offset.Y)
+
+            bar.Size = Vector2(settings.thickness - 2, (bar_y - 2) * hp_perc)
+            bar.Position = base.Position + Vector2(1, (bar_y - 1) - bar.Size.Y)
+            bar.Color = settings.color_empty:Lerp(settings.color_full, hp_perc)
+        
+            if (not settings.text) then
+                text.Visible = false
+                return
+            end
+            text.Text = tost(math_round(hp))
+            text.Color = bar.Color
+            text.Position = bar.Position + Vector2(-text.TextBounds.X / 2 - 2, -text.TextBounds.Y / 2)
+        end
+    end
+    local function tool_esp(settings, info)
+        local drawing = te.tool
+        drawing.Visible = settings.enabled
+        if (settings.enabled ) then
+            local tool = 'None'
+            drawing.Visible = true
+            drawing.Color = settings.color
+            drawing.Text = "["..getcurrentweapon(player).."]"
+            drawing.Position = info.points.B + Vector2(0, 1)
+        end
+    end
+    local function offscreenarrow_esp(settings, info)
+        if (settings.enabled ) then
+            local arrow = osa.arrow
+            local outline = osa.outline
+
+            arrow.Visible = true
+            arrow.Color = settings.color
+
+            local proj = camera.CFrame:PointToObjectSpace(info.position)
+            local angle = math.atan2(proj.Z, proj.X)
+            local direction = Vector2(math_cos(angle), math_sin(angle))
+            local pos = (direction * settings.radius / 2) + camera.ViewportSize / 2
+            arrow.PointA = pos
+            arrow.PointB = pos - rotateVector2(direction, math_rad(35)) * settings.size
+            arrow.PointC = pos - rotateVector2(direction, -math_rad(35)) * settings.size
+
+            if (settings.outline) then
+                outline.Visible = true
+                outline.PointA = arrow.PointA
+                outline.PointB = arrow.PointB
+                outline.PointC = arrow.PointC
+            else
+                outline.Visible = false
+            end
+            local arrow_info = {
+                offset = Vector2(settings.size / 2, settings.size / 2),
+                vector2 = pos - rotateVector2(direction, math_rad(0)) * (settings.size / 2),
+                position = info.position,
+                humanoid = info.Torso,
+                character = info,
+            }
+            arrow_info.points = calculatePoints(arrow_info.offset, arrow_info.vector2)
+            if (settings.hpbars) then
+                healthbar_esp(script_settings.healthbar, arrow_info)
+            end
+            if (settings.name) then
+                name_esp(script_settings.name, arrow_info)
+            end
+            if (settings.box) then
+                box_esp(script_settings.box, arrow_info)
+            end
+            if (settings.tool) then
+                tool_esp(script_settings.tool, arrow_info)
+            end
+            if (settings.distance) then
+                distance_esp(script_settings.distance, arrow_info)
+            end
+            if (settings.filledbox) then
+                filledbox_esp(script_settings.filledbox, arrow_info)
+            end
+        end
+    end
+    -- loop
+    local connection; connection = runservice.RenderStepped:Connect(function()
+        if (not player)  then
+            destroy_drawings()
+            connection:Disconnect()
+            return
+        end
+        local info = {
+            character = player,
+			
+        }
+        if (not (script_settings.enabled and info)) then
+            hide_drawings()
+            return
+        end
+		
+    if (not (player.model:FindFirstChild("Head"))) then
+            destroy_drawings()
+            return
+        end
+
+        info.humanoid = info
+		
+        info.rootpart = info
+
+        info.orientation, info.size, info.position = functions:getboundings(player.model)
+        info.vector2, info.on_screen = functions:worldtoviewport(info.position)
+        if (not info.on_screen) then
+            hide_drawings()
+            offscreenarrow_esp(script_settings.offscreenarrows, info)
+            return
+        end
+        info.offset = calculateOffset(info.vector2, info.position, info.size)
+        info.points = calculatePoints(info.offset, info.vector2)
+        healthbar_esp(script_settings.healthbar, info)
+        distance_esp(script_settings.distance, info)
+        name_esp(script_settings.name, info)
+        box_esp(script_settings.box, info)
+        tool_esp(script_settings.tool, info)
+        filledbox_esp(script_settings.filledbox, info)
+        toggle_table('offscreenarrows', false)
+    end)
+    table_insert(_G.connections, connection)
+end
+
+
+
+local enimys = true
+ for i,v in pairs(Entity_Table) do
+ if (v.type == 'Player' or v.type == 'Soldier' or v.type == 'Officer') and not v.sleeping then
+	add_player(v)
+ end
+end
+
+--[[
+ for i,v in pairs(Player_Table) do 
+        --local PlayerModel = rawget(v, "model");
+            if v.model and not v.sleeping then 
+        add_player(v)
+    end
+end]]
+local chiladded; 
+chiladded = workspace.ChildAdded:Connect(function(child)
+    if not child:FindFirstChild('Head') then 
+        return;
+    end;
+    task.wait(0.1);
+    for i, v in pairs(Entity_Table) do
+        --local m = rawget(v, 'model');
+        if v.type == 'Player' or v.type == 'Soldier' or v.type == 'Officer' then 
+        if (child == v.model and not v.sleeping) then
+            add_player(v);
+            break;
+        end;
+    end;
+    end
+end)
+end
+
+
+
+
+table_insert(_G.connections, chiladded)
